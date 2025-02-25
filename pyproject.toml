@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "deepvar"
+version = "0.1.0"
+description = "Code to train DeepVaR model"
+authors = ["George Fatouros <gfatouros@innov-acts.com>"]
+license = "\u001b[A"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "1.23.5"
+pandas = "^2.0.0"
+notebook = "^7.3.2"
+gluonts = "^0.13.2"
+torch = "^2.0.0"
+lightning = {extras = ["extra"], version = "^2.5.0.post0"}
+scipy = "^1.15.2"
+yfinance = "^0.2.54"
+matplotlib = "^3.7.1"
+orjson = "^3.10.15"
+tensorboard = "^2.19.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
