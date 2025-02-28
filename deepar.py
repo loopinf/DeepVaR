@@ -101,8 +101,8 @@ class StockReturnPredictor:
         # Save the original price data
         self.price_data = df.copy()
         
-        # Convert prices to log returns
-        self.returns_data = np.log(df / df.shift(1)).dropna()
+        # Convert prices to returns
+        self.returns_data = (df / df.shift(1)).dropna()
         
         # Make sure index is sorted
         self.returns_data = self.returns_data.sort_index()
@@ -155,29 +155,55 @@ class StockReturnPredictor:
         
         return long_data
     
-    def prepare_dataset(self, train_ratio=0.8):
+    def prepare_dataset(self, train_ratio=0.7, val_ratio=0.15):
         """
-        Prepare GluonTS datasets for training and testing using long format data.
+        Prepare GluonTS datasets for training, validation, and testing using long format data.
+        
+        Args:
+            train_ratio: Ratio of data to use for training
+            val_ratio: Ratio of data to use for validation
         """
         # Calculate split points
         train_size = int(len(self.returns_data) * train_ratio)
-        split_date = self.returns_data.index[train_size]
+        val_size = int(len(self.returns_data) * val_ratio)
         
-        # Create training and testing dataframes
-        train_data = self.returns_data.loc[:split_date].copy()
+        # Determine split dates
+        train_end_date = self.returns_data.index[train_size]
+        val_end_date = self.returns_data.index[train_size + val_size]
+        
+        # Create training, validation, and testing dataframes
+        train_data = self.returns_data.loc[:train_end_date].copy()
+        
+        # For validation, include context_length days before the split for proper prediction
+        val_data = self.returns_data.loc[
+            self.returns_data.index[train_size - self.context_length]:val_end_date
+        ].copy()
+        
         # For testing, include context_length days before the split for proper prediction
-        test_data = self.returns_data.loc[self.returns_data.index[train_size - self.context_length]:].copy()
+        test_data = self.returns_data.loc[
+            self.returns_data.index[train_size + val_size - self.context_length]:
+        ].copy()
         
         print(f"Training data: {len(train_data)} rows")
+        print(f"Validation data: {len(val_data)} rows")
         print(f"Testing data: {len(test_data)} rows")
         
-        # Convert wide format to long format for training
+        # Convert wide format to long format
         train_long = self._convert_to_long_format(train_data)
+        val_long = self._convert_to_long_format(val_data)
         test_long = self._convert_to_long_format(test_data)
         
         # Create GluonTS datasets
         self.train_dataset = PandasDataset.from_long_dataframe(
             train_long,
+            item_id="item_id",
+            timestamp="timestamp",
+            target="target",
+            freq=self.freq
+        )
+        
+        self.val_dataset = PandasDataset.from_long_dataframe(
+            val_long,
             item_id="item_id",
             timestamp="timestamp",
             target="target",
@@ -192,16 +218,29 @@ class StockReturnPredictor:
             freq=self.freq
         )
         
-        # Store the train end index for later use
+        # Store indices for later use
         self.train_end_idx = train_size
+        self.val_end_idx = train_size + val_size
         
-        return self.train_dataset, self.test_dataset
+        return self.train_dataset, self.val_dataset, self.test_dataset
     
     def train_model(self):
         """
-        Train a DeepAR model for all stocks together.
+        Train a DeepAR model for all stocks together with validation.
         """
         print("Training model...")
+        
+        # Define custom validation callback
+        class ValidationCallback(pl.callbacks.Callback):
+            def __init__(self):
+                self.val_losses = []
+                
+            def on_validation_epoch_end(self, trainer, pl_module):
+                val_loss = trainer.callback_metrics.get('val_loss', torch.tensor(float('nan')))
+                self.val_losses.append(val_loss.item() if not torch.isnan(val_loss) else float('nan'))
+        
+        # Initialize validation callback
+        val_callback = ValidationCallback()
         
         # Configure PyTorch Lightning trainer parameters
         pl_trainer_kwargs = {
@@ -210,15 +249,16 @@ class StockReturnPredictor:
             "enable_progress_bar": True,
             "callbacks": [
                 pl.callbacks.EarlyStopping(
-                    monitor="train_loss",
+                    monitor="val_loss",
                     patience=self.early_stopping_patience,
                     mode="min"
-                )
+                ),
+                val_callback
             ],
             "deterministic": True,  # For reproducibility
         }
         
-        # Configure the DeepAR model - simplified without time features
+        # Configure the DeepAR model
         estimator = DeepAREstimator(
             prediction_length=self.prediction_length,
             context_length=self.context_length,
@@ -232,29 +272,63 @@ class StockReturnPredictor:
             trainer_kwargs=pl_trainer_kwargs,
         )
         
-        # Train the model
-        self.model = estimator.train(self.train_dataset)
+        # Train the model with explicit validation dataset
+        self.model = estimator.train(
+            training_data=self.train_dataset,
+            validation_data=self.val_dataset,  # Pass validation dataset
+            num_workers=0  # Avoid multiprocessing issues
+        )
+        
+        # Store validation losses for analysis
+        self.val_losses = val_callback.val_losses
+        
+        # Plot training and validation loss curves
+        self._plot_loss_curves()
         
         return self.model
+    
+    def _plot_loss_curves(self):
+        """Plot training and validation loss curves"""
+        if hasattr(self, 'val_losses') and len(self.val_losses) > 0:
+            plt.figure(figsize=(10, 6))
+            plt.plot(range(1, len(self.val_losses) + 1), self.val_losses, 'b-', label='Validation Loss')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title('Model Training and Validation Loss')
+            plt.legend()
+            plt.grid(True)
+            
+            # Save the plot
+            loss_plot_path = self.results_dir / 'loss_curves.png'
+            plt.savefig(loss_plot_path)
+            plt.close()
+            print(f"Loss curves saved to {loss_plot_path}")
     
     def train_all_models(self):
         """
         Train a single model for all stocks.
         """
         # Check if dataset is prepared
-        if not hasattr(self, 'train_dataset'):
-            raise ValueError("Dataset not prepared. Call prepare_dataset() first.")
+        if not hasattr(self, 'train_dataset') or not hasattr(self, 'val_dataset'):
+            raise ValueError("Datasets not prepared. Call prepare_dataset() first.")
         
         self.model = self.train_model()
         print("Model training complete")
     
-    def predict_all(self):
+    def predict_all(self, dataset=None):
         """
         Generate predictions for all tickers using the trained model.
+        
+        Args:
+            dataset: Dataset to use for predictions (default: test_dataset)
         """
         # Check if model is trained
         if not hasattr(self, 'model'):
             raise ValueError("Model not trained. Call train_all_models() first.")
+        
+        # Default to test dataset if not specified
+        if dataset is None:
+            dataset = self.test_dataset
         
         # Create a predictor from the model
         predictor = self.model
@@ -262,7 +336,7 @@ class StockReturnPredictor:
         # Make predictions
         print("Generating predictions...")
         forecast_it, ts_it = make_evaluation_predictions(
-            dataset=self.test_dataset,
+            dataset=dataset,
             predictor=predictor,
             num_samples=self.num_samples
         )
@@ -284,10 +358,10 @@ class StockReturnPredictor:
             else:
                 print(f"Type of time series item: {type(first_ts)}")
         
-        # Get the list of unique item_ids from the test dataset
+        # Get the list of unique item_ids from the dataset
         try:
-            unique_item_ids = sorted(set(item['item_id'] for item in self.test_dataset))
-            print(f"Found {len(unique_item_ids)} unique item IDs in test dataset")
+            unique_item_ids = sorted(set(item['item_id'] for item in dataset))
+            print(f"Found {len(unique_item_ids)} unique item IDs in dataset")
             
             # Map each forecast to the corresponding item_id
             for i, item_id in enumerate(unique_item_ids):
@@ -297,7 +371,7 @@ class StockReturnPredictor:
                         'actuals': tss[i]
                     }
         except (TypeError, AttributeError) as e:
-            print(f"Error accessing item_ids from test dataset: {e}")
+            print(f"Error accessing item_ids from dataset: {e}")
             print("Falling back to column order mapping")
             
             # Get the original tickers
@@ -314,30 +388,47 @@ class StockReturnPredictor:
         print(f"Mapped predictions for {len(self.forecasts)} tickers")
         return self.forecasts
     
-    def evaluate_all(self):
+    def evaluate_model(self, dataset=None, start_idx=None):
         """
-        Evaluate the model for all tickers.
+        Evaluate the model on the specified dataset.
+        
+        Args:
+            dataset: Dataset to use for evaluation (default: test_dataset)
+            start_idx: Start index for evaluation (default: test_start_idx)
+        
+        Returns:
+            metrics: Dictionary with evaluation metrics
         """
-        # Check if predictions are available
+        # Default to test dataset if not specified
+        if dataset is None:
+            dataset = self.test_dataset
+            start_idx = self.val_end_idx
+        elif start_idx is None:
+            # Use appropriate start index based on dataset
+            if dataset is self.test_dataset:
+                start_idx = self.val_end_idx
+            elif dataset is self.val_dataset:
+                start_idx = self.train_end_idx
+            else:
+                start_idx = 0
+        
+        # Make predictions if not already available
         if not hasattr(self, 'forecasts') or len(self.forecasts) == 0:
-            raise ValueError("Predictions not available. Call predict_all() first.")
+            self.predict_all(dataset)
         
         # Initialize metrics
         all_mse = []
         all_mae = []
         all_mape = []
         
-        # Get the test period start index
-        test_start_idx = self.train_end_idx
-        
         # Evaluate each ticker
         for ticker, forecast_data in tqdm(self.forecasts.items(), desc="Evaluating"):
             forecast = forecast_data['predictions']
             ts = forecast_data['actuals']
             
-            # Get the actual returns for this ticker during the test period
+            # Get the actual returns for this ticker during the evaluation period
             if ticker in self.returns_data.columns:
-                actual_returns = self.returns_data[ticker].iloc[test_start_idx:test_start_idx + self.prediction_length + len(forecast.samples[0]) - 1]
+                actual_returns = self.returns_data[ticker].iloc[start_idx:start_idx + self.prediction_length + len(forecast.samples[0]) - 1]
                 
                 # Get the prediction quantiles (median for point forecast)
                 pred_median = forecast.quantile(0.5)
@@ -392,6 +483,18 @@ class StockReturnPredictor:
         
         return self.metrics, avg_metrics
     
+    def evaluate_all(self):
+        """
+        Evaluate the model on the test dataset.
+        """
+        return self.evaluate_model(self.test_dataset, self.val_end_idx)
+    
+    def evaluate_validation(self):
+        """
+        Evaluate the model on the validation dataset.
+        """
+        return self.evaluate_model(self.val_dataset, self.train_end_idx)
+    
     def plot_distribution(self, ticker, idx=-1):
         """
         Plot the predicted distribution for a specific ticker at a specific time.
@@ -414,7 +517,7 @@ class StockReturnPredictor:
             idx = 0  # For simplicity, plot the first prediction
         
         # Get test data indices
-        test_start_idx = self.train_end_idx - self.context_length
+        test_start_idx = self.val_end_idx - self.context_length
         pred_date_idx = test_start_idx + self.context_length + idx
         next_date_idx = pred_date_idx + 1
         
@@ -486,7 +589,7 @@ class StockReturnPredictor:
         if len(self.forecasts) > 5:
             print(f"Note: Only plotted distributions for the first 5 tickers out of {len(self.forecasts)} total")
     
-    def run_backtest(self, start_date=None, end_date=None, num_stocks=100):
+    def run_backtest(self, start_date=None, end_date=None, num_stocks=100, dataset=None):
         """
         Run a backtest of the model from start_date to end_date.
         
@@ -494,17 +597,25 @@ class StockReturnPredictor:
             start_date: Start date for backtest (defaults to beginning of test set)
             end_date: End date for backtest (defaults to end of test set)
             num_stocks: Number of stocks to include in backtest (to limit computation)
+            dataset: Dataset to use for backtest (default: test_dataset)
         
         Returns:
             backtest_results: DataFrame with backtest results
         """
         # Check if predictions are available
         if not hasattr(self, 'forecasts') or len(self.forecasts) == 0:
-            raise ValueError("Predictions not available. Call predict_all() first.")
+            if dataset is None:
+                dataset = self.test_dataset
+            self.predict_all(dataset)
+        
+        # Determine the appropriate start index for evaluation
+        if dataset is self.val_dataset:
+            start_idx = self.train_end_idx
+        else:  # Default to test dataset
+            start_idx = self.val_end_idx
         
         # Get the test data dates
-        test_start_idx = self.train_end_idx
-        test_dates = self.returns_data.index[test_start_idx:]
+        test_dates = self.returns_data.index[start_idx:]
         
         # Filter by date if provided
         if start_date is not None:
@@ -609,7 +720,8 @@ class StockReturnPredictor:
             print(f"VaR 1% Hit Ratio: {metrics['hit_ratio_1']:.4f} (Target: 0.01)")
             
             # Save the backtest results
-            backtest_df.to_csv(self.results_dir / "backtest_results.csv", index=False)
+            dataset_name = "validation" if dataset is self.val_dataset else "test"
+            backtest_df.to_csv(self.results_dir / f"{dataset_name}_backtest_results.csv", index=False)
             
             # Group by date and calculate portfolio metrics
             portfolio_results = backtest_df.groupby('date').agg({
@@ -623,9 +735,6 @@ class StockReturnPredictor:
             }).reset_index()
             
             # Save portfolio results
-            portfolio_results.to_csv(self.results_dir / "portfolio_backtest_results.csv", index=False)
+            portfolio_results.to_csv(self.results_dir / f"{dataset_name}_portfolio_backtest_results.csv", index=False)
             
             return backtest_df, portfolio_results
-        else:
-            print("Warning: No backtest results generated.")
-            return None, None

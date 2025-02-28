@@ -3,8 +3,9 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime, timedelta
 from deepar import StockReturnPredictor
+import os
+import static_parms as sp
 
-# Example: Download SP100 tickers data using yfinance
 def get_sp100_tickers():
     return [
         "AAPL", "ABBV", "ABT", "ACN", "ADBE", "AIG", "ALL", "AMGN", "AMT", "AMZN", "AVGO",
@@ -32,7 +33,6 @@ def main():
     start_date = (datetime.now() - timedelta(days=5*365)).strftime('%Y-%m-%d')
     
     # Check if data needs to be downloaded
-    import os
     data_dir = 'stock_data'
     data_file = os.path.join(data_dir, 'sp100_daily_prices.csv')
     
@@ -52,20 +52,20 @@ def main():
     else:
         print(f"Using existing data from {data_file}")
     
-    # Initialize the predictor with optimized parameters for SP100 stocks
+    # Initialize the predictor with parameters from static_parms.py
     predictor = StockReturnPredictor(
-        data_path=data_file,
-        prediction_length=1,         # Predict 1 day ahead
-        context_length=42,           # Use ~3 months of context
+        data_path=sp.path,
+        prediction_length=sp.PREDICTION_LENGTH,
+        context_length=sp.CONTEXT_LENGTH,
         num_samples=1000,            # Generate 1000 samples
-        lr=5e-4,                     # Lower learning rate for stability
+        lr=sp.LRATE,                 # Learning rate from static_parms
         batch_size=32,
-        num_epochs=200,              # Reduced for faster testing
+        num_epochs=sp.EPOCHS,        # Epochs from static_parms
         early_stopping_patience=5,
-        hidden_size=64,              # Larger hidden size for complex patterns
-        num_layers=3,                # More layers for deeper patterns
-        dropout_rate=0.2,            # Higher dropout for regularization
-        freq="D",                    # Daily frequency
+        hidden_size=sp.N_CELLS,      # Hidden size from static_parms
+        num_layers=sp.NUM_LAYERS,    # Number of layers from static_parms
+        dropout_rate=sp.DROPOUT,     # Dropout rate from static_parms
+        freq=sp.FREQ,                # Frequency from static_parms
         results_dir="deepar_results" # Directory to save results
     )
     
@@ -74,16 +74,27 @@ def main():
     predictor.load_data()
     
     print("Preparing datasets...")
-    predictor.prepare_dataset(train_ratio=0.8)
+    # Calculate train and validation ratios based on static parameters
+    total_days = len(predictor.returns_data)
+    train_ratio = 1 - (sp.NUMBER_OF_TEST + sp.NUMBER_OF_VAL) / total_days
+    val_ratio = sp.NUMBER_OF_VAL / total_days
+    
+    # Prepare datasets with train, validation, and test splits
+    predictor.prepare_dataset(train_ratio=train_ratio, val_ratio=val_ratio)
     
     print("Training models for all tickers...")
     predictor.train_all_models()
     
-    print("Generating predictions...")
+    print("Evaluating on validation set...")
+    val_metrics, val_avg_metrics = predictor.evaluate_validation()
+    print(f"Validation set metrics: MSE={val_avg_metrics['Average MSE']:.6f}, MAE={val_avg_metrics['Average MAE']:.6f}")
+    
+    print("Generating predictions for test set...")
     predictor.predict_all()
     
-    print("Evaluating models...")
-    predictor.evaluate_all()
+    print("Evaluating models on test set...")
+    test_metrics, test_avg_metrics = predictor.evaluate_all()
+    print(f"Test set metrics: MSE={test_avg_metrics['Average MSE']:.6f}, MAE={test_avg_metrics['Average MAE']:.6f}")
     
     print("Running backtest...")
     backtest_results, portfolio_results = predictor.run_backtest()
