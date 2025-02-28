@@ -1,138 +1,143 @@
-# DeepVaR
-Portfolio Risk Assessment leveraging Probabilistic Deep Neural Networks for time series forecasting.
+# DeepVaR: Deep Learning for Value-at-Risk Prediction in Financial Markets
 
-## Project Overview
-DeepVaR uses DeepAR (Deep Auto-Regressive) models to predict stock returns and estimate Value at Risk (VaR) for financial portfolios. The project leverages state-of-the-art time series forecasting techniques to generate probabilistic predictions that capture uncertainty.
+This repository implements a probabilistic deep learning model for predicting stock returns and estimating Value-at-Risk (VaR) using DeepAR, a recurrent neural network architecture particularly suited for time series forecasting.
 
-### Features
-- Deep learning-based time series forecasting for financial data
-- Probabilistic predictions with quantile estimates
-- Support for multi-stock portfolio analysis
-- GPU-accelerated training with PyTorch Lightning
-- Time features for capturing day-of-week, month, and other temporal patterns
-- Configurable model parameters via static configuration
-- Automated S&P 100 stock data collection
+## Overview
+
+DeepVaR is designed to predict the distribution of future stock returns rather than just point estimates, making it especially valuable for risk management applications. The model:
+
+- Uses returns from historical price data
+- Generates probabilistic forecasts with quantile estimates
+- Provides Value-at-Risk (VaR) metrics at multiple confidence levels (90%, 95%, 99%)
+- Allows for backtesting to evaluate the accuracy of both return predictions and VaR estimates
+
+## Repository Structure
+
+```
+.
+├── run.py                # Main script to execute the entire workflow
+├── deepar.py             # The core implementation of the DeepAR model for stock returns
+├── static_parms.py       # Configuration parameters for the model
+├── deepvar_results.ipynb # Jupyter notebook for analyzing and visualizing results
+└── stock_data/           # Directory for storing stock price data
+    └── sp100_daily_prices.csv  # Historical price data for S&P 100 stocks
+```
+
+## Features
+
+- **Multivariate Time Series Modeling**: Simultaneously models multiple stocks
+- **Probabilistic Forecasting**: Generates distributions of future returns rather than just point forecasts
+- **Value-at-Risk Estimation**: Calculates VaR at multiple confidence levels (90%, 95%, 99%)
+- **Backtest Framework**: Evaluates model performance through historical backtesting
+- **Validation Dataset**: Incorporates separate training, validation, and test sets for robust evaluation
+- **Comprehensive Visualization**: Includes detailed visualizations and analysis of model performance
+
+## Requirements
+
+The project uses Poetry for dependency management. Key dependencies include:
+
+- Python 3.11+
+- PyTorch 2.0+
+- GluonTS 0.13.2+
+- pandas 2.0.0+
+- numpy 1.23.5
+- matplotlib 3.7.1+
+- seaborn 0.13.2+
+- PyTorch Lightning (with extras)
+- yfinance (for downloading historical stock data)
+
+All dependencies are specified in the `pyproject.toml` file and will be installed automatically by Poetry.
 
 ## Installation
-### Prerequisites
-- Python 3.11+
-- Poetry (dependency management)
-
-### Setup
-If you don't have Poetry installed, install it from [here](https://python-poetry.org/docs/#installation).
-1. Clone the repository:
 
 ```bash
-git clone https://github.com/giorgosfatouros/DeepVaR.git
+# Clone the repository
+git clone https://github.com/yourusername/DeepVaR.git
 cd DeepVaR
+git checkout extra
+
+# Install dependencies using Poetry
+# If you don't have Poetry installed, install it first:
+# curl -sSL https://install.python-poetry.org | python3 -
+
+# Install all dependencies from pyproject.toml
+poetry install
+
+# Activate the virtual environment
+poetry shell
 ```
-
-2. Create and activate the virtual environment, then install dependencies:
-
-```bash
-   poetry env use python3.11
-   poetry shell
-   poetry install
-   ```
 
 ## Usage
-### Data Preparation
 
-You have two options for preparing your stock data:
-
-#### Option 1: Use the built-in data downloader
-
-The project includes a script to automatically download S&P 100 stock data:
+### Running the Model
 
 ```bash
-python stock_data/get_prices.py
+python run.py
 ```
 
 This will:
-- Download daily price data for all S&P 100 stocks
-- Save the data to `stock_data/sp100_daily_prices.csv`
-- Handle any missing data or download errors
+1. Download S&P 100 historical stock data if not already present
+2. Preprocess the data (convert to log returns)
+3. Split into training, validation, and test sets
+4. Train the DeepAR model
+5. Generate predictions and VaR estimates
+6. Evaluate model performance
+7. Save results to the `deepar_results` directory
 
-#### Option 2: Use your own data
+### Configuration
 
-Place your stock data CSV file in the `stock_data` directory. The expected format is a CSV with a 'Date' column and price columns for each stock.
+Model parameters can be customized in `static_parms.py`:
 
-### Configure your parameters in `static_parms.py`:
-
-#### Model hyperparameters
 ```python
-EPOCHS = 200
-LRATE = 0.0001
-FREQ = "1D"  # Daily frequency
+EPOCHS = 5
+LRATE = .0001
+FREQ = "1D"
 PREDICTION_LENGTH = 1
 CONTEXT_LENGTH = 15
+START_DAY = '2018-01-01'
 NUM_LAYERS = 2
 DROPOUT = 0.1
+CELL_TYPE = 'lstm'
 N_CELLS = 100
-path = "stock_data/sp100_daily_prices.csv"
-
-NUMBER_OF_TEST = 365
-NUMBER_OF_VAL = 365
-NUMBER_OF_TRAIN = 1098
+USE_FT = True
 ```
 
-### Training and Prediction
-Run the main script to train the model and generate forecasts:
+### Analyzing Results
+
+After running the model, you can analyze the results using the included Jupyter notebook:
 
 ```bash
-python deepAR.py
+jupyter notebook deepvar_results.ipynb
 ```
 
-This will:
-1. Load the stock price data
-2. Calculate log returns
-3. Split the data into train, validation, and test sets
-4. Train a DeepAR model with the specified parameters
-5. Generate forecasts for the test period
-6. Save the forecasts to a pickle file
+The notebook provides comprehensive visualizations and analysis of:
+- Prediction accuracy (MSE, MAE)
+- Value-at-Risk performance (hit ratios)
+- Return distributions
+- Time series plots of actual vs. predicted returns
+- Ticker-level performance
 
-### Visualization
-You can visualize the forecasts using the `plot_forecasts` function in `functions.py`:
+## Model Architecture
 
-```bash
-python functions.py
-```
+DeepVaR uses the DeepAR model from GluonTS with the following components:
+
+- **RNN Architecture**: LSTM/GRU cells for capturing temporal dependencies
+- **Student's t-Distribution Output**: Captures the fat-tailed nature of financial returns
+- **Embedding Layers**: For handling multiple stock identifiers
+- **Early Stopping**: Based on validation loss to prevent overfitting
+- **Customizable Context Length**: The number of past observations used for prediction
+
+## Results
+
+The model evaluation includes:
+- Mean Squared Error (MSE) and Mean Absolute Error (MAE) for point forecasts
+- VaR hit ratios (percentage of times returns exceed VaR estimates)
+- Performance comparison across tickers
+- Backtest results showing model performance over time
 
 
-### Model Details
-The DeepAR model:
-- Uses a recurrent neural network (LSTM) architecture
-- Incorporates temporal features (day of month, day of week, month of year)
-- Supports time series lags for capturing patterns at different time scales
-- Generates probabilistic forecasts (full distribution of possible futures)
+## Acknowledgements
 
-### Monitoring and Debugging
-TensorBoard integration for monitoring training progress
-
-```bash
-tensorboard --logdir lightning_logs/
-```
-- Model performance metrics are logged during training
-- GPU utilization statistics are available during training
-
-### Advanced Configuration
-#### Time Features
-The model uses the following time features:
-- Day of month
-- Day of week
-- Month of year
-
-#### Adding Custom Features
-To add custom features to the model, modify the `list_dataset` method in `functions.py` to include additional dynamic or static features.
-
-#### Customizing the Stock Universe
-To use a different set of stocks, you can:
-- Modify the `get_sp100_tickers()` function in `stock_data/get_prices.py`
-- Run the script to download data for your custom stock list
-- Or prepare your own CSV file with the desired stocks  
-
-### Troubleshooting
-- CUDA out of memory: Reduce batch size or model size (N_CELLS)
-- Device mismatch errors: Ensure all tensors are on the same device
-- Tensor dimension errors: Check input shape consistency and time feature dimensions
+- GluonTS framework for time series forecasting
+- PyTorch and PyTorch Lightning for deep learning implementation
 
