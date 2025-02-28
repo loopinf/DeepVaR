@@ -77,7 +77,7 @@ python run.py
 
 This will:
 1. Download S&P 100 historical stock data if not already present
-2. Preprocess the data (convert to log returns)
+2. Preprocess the data (convert to returns and drop stocks with missing values)
 3. Split into training, validation, and test sets
 4. Train the DeepAR model
 5. Generate predictions and VaR estimates
