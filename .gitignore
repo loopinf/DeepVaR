@@ -7,3 +7,15 @@ __pycache__/
 *.pyw
 *.pyz
 *.pywz
+*.pkl
+*.json
+*.jsonl
+*.jsonl.gz
+*.jsonl.bz2
+.DS_Store
+.idea/
+.vscode/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
