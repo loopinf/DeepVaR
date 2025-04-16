@@ -7,7 +7,7 @@ license = "\u001b[A"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.11,<3.12"
 numpy = "1.23.5"
 pandas = "^2.0.0"
 notebook = "^7.3.2"
@@ -20,8 +20,9 @@ matplotlib = "^3.7.1"
 orjson = "^3.10.15"
 tensorboard = "^2.19.0"
 seaborn = "^0.13.2"
+arch = "^6.2.0"
 
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
